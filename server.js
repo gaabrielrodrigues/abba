@@ -86,6 +86,42 @@ const initDb = async () => {
 initDb();
 
 // --- Auth Routes ---
+app.post('/api/register', async (req, res) => {
+    const { username, password } = req.body;
+    try {
+        // Validate input
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password are required' });
+        }
+        if (username.length < 3) {
+            return res.status(400).json({ error: 'Username must be at least 3 characters' });
+        }
+        if (password.length < 6) {
+            return res.status(400).json({ error: 'Password must be at least 6 characters' });
+        }
+
+        // Check if user already exists
+        const existingUser = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+        if (existingUser.rows.length > 0) {
+            return res.status(409).json({ error: 'Username already exists' });
+        }
+
+        // Hash password and create user
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const result = await pool.query(
+            'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id, username',
+            [username, hashedPassword]
+        );
+
+        const user = result.rows[0];
+        const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '30d' });
+        res.status(201).json({ token, username: user.username });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Registration failed' });
+    }
+});
+
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     try {

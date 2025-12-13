@@ -3,7 +3,7 @@ import {
   Plus, ArrowUpCircle, ArrowDownCircle,
   Wallet, X, ChevronLeft, ChevronRight,
   LayoutDashboard, PieChart as PieChartIcon, List,
-  CheckCircle2, Clock, Calendar, Trash2, LogOut, Lock, Repeat, Infinity as InfinityIcon, Bell
+  CheckCircle2, Clock, Calendar, Trash2, LogOut, Lock, Repeat, Infinity as InfinityIcon, Bell, BellOff
 } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import './App.css';
@@ -45,12 +45,33 @@ const formatCurrency = (value) => {
 function LoginScreen({ onLogin }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError('');
+
+    // Validation for registration
+    if (isRegistering) {
+      if (username.length < 3) {
+        setError('Usuário deve ter pelo menos 3 caracteres');
+        return;
+      }
+      if (password.length < 6) {
+        setError('Senha deve ter pelo menos 6 caracteres');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError('As senhas não coincidem');
+        return;
+      }
+    }
+
     try {
-      const res = await fetch(`${API_BASE}/login`, {
+      const endpoint = isRegistering ? '/register' : '/login';
+      const res = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
@@ -59,35 +80,30 @@ function LoginScreen({ onLogin }) {
       if (res.ok) {
         onLogin(data.token);
       } else {
-        setError(data.error || 'Erro ao entrar');
+        setError(data.error || (isRegistering ? 'Erro ao criar conta' : 'Erro ao entrar'));
       }
     } catch (err) {
       setError('Erro de conexão');
     }
   };
 
+  const toggleMode = () => {
+    setIsRegistering(!isRegistering);
+    setError('');
+    setConfirmPassword('');
+  };
+
   return (
     <div className="login-container">
-      <video
-        autoPlay
-        loop
-        muted
-        playsInline
-        className="video-bg"
-        poster="https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=2070&auto=format&fit=crop"
-      >
-        {/* Try local file first, then fallback to a generic abstract loop */}
-        <source src="/login-background.mp4" type="video/mp4" />
-        <source src="https://assets.mixkit.co/videos/preview/mixkit-abstract-black-and-white-lines-loop-3023-large.mp4" type="video/mp4" />
-      </video>
-
       <div className="login-card">
         <div className="flex-center" style={{ flexDirection: 'column', marginBottom: '2rem' }}>
           <div style={{ background: '#fff', padding: '12px', borderRadius: '16px', marginBottom: '1.5rem', boxShadow: '0 4px 20px rgba(255,255,255,0.3)' }}>
             <img src="/icon.svg" alt="logo" width="40" height="40" style={{ display: 'block' }} />
           </div>
           <h1 style={{ fontSize: '1.8rem', fontWeight: 'bold' }}>Finance</h1>
-          <p style={{ color: 'rgba(255,255,255,0.6)' }} className="text-sm">Controle sua vida financeira</p>
+          <p style={{ color: 'rgba(255,255,255,0.6)' }} className="text-sm">
+            {isRegistering ? 'Crie sua conta' : 'Controle sua vida financeira'}
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="flex-col gap-4">
@@ -97,7 +113,8 @@ function LoginScreen({ onLogin }) {
               type="text"
               value={username} onChange={e => setUsername(e.target.value)}
               style={{ padding: '0.8rem', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff' }}
-              placeholder="admin"
+              placeholder={isRegistering ? "Escolha um usuário" : "admin"}
+              required
             />
           </div>
           <div className="input-group">
@@ -107,13 +124,43 @@ function LoginScreen({ onLogin }) {
               value={password} onChange={e => setPassword(e.target.value)}
               style={{ padding: '0.8rem', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff' }}
               placeholder="••••••"
+              required
             />
           </div>
+
+          {isRegistering && (
+            <div className="input-group animate-fade-in">
+              <label className="text-xs" style={{ color: 'rgba(255,255,255,0.8)' }}>Confirmar Senha</label>
+              <input
+                type="password"
+                value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
+                style={{ padding: '0.8rem', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff' }}
+                placeholder="••••••"
+                required
+              />
+            </div>
+          )}
 
           {error && <p className="text-xs text-error" style={{ color: '#ef4444', textAlign: 'center' }}>{error}</p>}
 
           <button className="btn btn-primary" type="submit" style={{ padding: '1rem', marginTop: '1rem', borderRadius: '12px', fontSize: '1rem' }}>
-            Entrar
+            {isRegistering ? 'Criar Conta' : 'Entrar'}
+          </button>
+
+          <button
+            type="button"
+            onClick={toggleMode}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'rgba(255,255,255,0.6)',
+              fontSize: '0.875rem',
+              cursor: 'pointer',
+              textDecoration: 'underline',
+              padding: '0.5rem'
+            }}
+          >
+            {isRegistering ? 'Já tem uma conta? Entrar' : 'Não tem conta? Criar agora'}
           </button>
         </form>
       </div>
@@ -431,12 +478,24 @@ export default function App() {
     }
 
     try {
-      const permission = await Notification.requestPermission();
+      let permission = Notification.permission;
+
+      if (permission === 'denied') {
+        alert('As notificações estão bloqueadas. Por favor, ative-as nas configurações do seu navegador (clique no ícone de cadeado/configurações na barra de endereço).');
+        return;
+      }
+
+      if (permission === 'default') {
+        permission = await Notification.requestPermission();
+      }
+
       setNotificationPermission(permission);
       setNotificationsEnabled(permission === 'granted');
 
       if (permission === 'granted') {
         showNotification('Notificações Ativadas! 🔔', 'Você receberá lembretes sobre contas vencendo');
+      } else if (permission === 'denied') {
+        alert('Você negou as notificações. Para ativar, você precisará mudar nas configurações do navegador.');
       }
     } catch (error) {
       console.error('Erro ao solicitar permissão:', error);
@@ -490,17 +549,10 @@ export default function App() {
             }}
             title={notificationsEnabled ? 'Notificações ativadas' : 'Ativar notificações'}
           >
-            <Bell size={18} color={notificationsEnabled ? '#4ade80' : '#888'} />
-            {!notificationsEnabled && (
-              <span style={{
-                position: 'absolute',
-                top: '4px',
-                right: '4px',
-                width: '8px',
-                height: '8px',
-                background: '#ef4444',
-                borderRadius: '50%'
-              }} />
+            {notificationsEnabled ? (
+              <Bell size={18} color="#fff" />
+            ) : (
+              <BellOff size={18} color="#ef4444" />
             )}
           </button>
           <button onClick={handleLogout} className="btn-icon">
@@ -566,13 +618,13 @@ export default function App() {
           <div style={{ background: '#fff', padding: '10px', borderRadius: '50%' }}>
             <Plus color="black" size={24} />
           </div>
-          <span className="text-sm font-medium">Nova Transação</span>
+          <span className="text-sm font-medium" style={{ color: '#fff' }}>Nova Transação</span>
         </button>
         <button className="card flex-center" style={{ height: '100px', flexDirection: 'column', gap: '10px', cursor: 'pointer' }} onClick={() => setActiveView(VIEWS.REPORTS)}>
           <div style={{ background: '#333', padding: '10px', borderRadius: '50%' }}>
             <PieChartIcon color="white" size={24} />
           </div>
-          <span className="text-sm font-medium">Relatórios</span>
+          <span className="text-sm font-medium" style={{ color: '#fff' }}>Relatórios</span>
         </button>
       </div>
     </div>
@@ -649,7 +701,7 @@ export default function App() {
       </div>
 
       <button
-        className="btn btn-primary"
+        className="btn btn-primary fab-button"
         style={{ position: 'fixed', bottom: '80px', right: '1.5rem', borderRadius: '50px', padding: '0.75rem 1.5rem', boxShadow: '0 4px 20px rgba(0,0,0,0.5)' }}
         onClick={() => setIsFormOpen(true)}
       >
@@ -812,9 +864,9 @@ export default function App() {
                 <label className="text-xs text-secondary">Valor</label>
                 <input
                   type="number" step="0.01" placeholder="0,00"
+                  inputMode="decimal"
                   value={amount} onChange={(e) => setAmount(e.target.value)}
                   style={{ fontSize: '2rem', padding: '0.5rem', textAlign: 'center', fontWeight: 'bold', background: 'transparent', border: 'none', borderBottom: '1px solid #333' }}
-                  autoFocus
                 />
               </div>
 
@@ -824,8 +876,8 @@ export default function App() {
               </div>
 
               {/* Status & Date & Recurrence */}
-              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                <div className="input-group" style={{ flex: 1, minWidth: '140px' }}>
+              <div style={{ display: 'flex', gap: '1rem', flexDirection: 'column' }}>
+                <div className="input-group" style={{ flex: 1 }}>
                   <label className="text-xs text-secondary">Data</label>
                   <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                     <input
@@ -838,7 +890,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="input-group" style={{ flex: 1, minWidth: '140px' }}>
+                <div className="input-group" style={{ flex: 1 }}>
                   <label className="text-xs text-secondary">Status</label>
                   <div
                     style={{
