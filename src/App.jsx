@@ -3,7 +3,7 @@ import {
   Plus, ArrowUpCircle, ArrowDownCircle,
   Wallet, X, ChevronLeft, ChevronRight,
   LayoutDashboard, PieChart as PieChartIcon, List,
-  CheckCircle2, Clock, Calendar, Trash2, LogOut, Lock, Repeat, Infinity as InfinityIcon
+  CheckCircle2, Clock, Calendar, Trash2, LogOut, Lock, Repeat, Infinity as InfinityIcon, Bell
 } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import './App.css';
@@ -153,6 +153,69 @@ export default function App() {
 
   // Report State
   const [reportType, setReportType] = useState('expense');
+
+  // Notification State
+  const [notificationPermission, setNotificationPermission] = useState('default');
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+
+  // Register Service Worker and setup notifications
+  useEffect(() => {
+    if ('serviceWorker' in navigator && 'Notification' in window) {
+      // Register service worker
+      navigator.serviceWorker.register('/sw.js')
+        .then(registration => {
+          console.log('Service Worker registrado:', registration);
+        })
+        .catch(err => console.error('Erro ao registrar Service Worker:', err));
+
+      // Check current permission
+      setNotificationPermission(Notification.permission);
+      setNotificationsEnabled(Notification.permission === 'granted');
+    }
+  }, []);
+
+  // Check for bills due today (runs daily)
+  useEffect(() => {
+    if (!token || !notificationsEnabled) return;
+
+    const checkBillsDueToday = () => {
+      const today = new Date().toISOString().split('T')[0];
+      const billsDueToday = transactions.filter(t =>
+        t.type === 'expense' &&
+        t.status === 'pending' &&
+        t.date === today
+      );
+
+      if (billsDueToday.length > 0) {
+        const totalAmount = billsDueToday.reduce((sum, t) => sum + t.amount, 0);
+        const message = billsDueToday.length === 1
+          ? `${billsDueToday[0].description} - ${formatCurrency(billsDueToday[0].amount)}`
+          : `${billsDueToday.length} contas - Total: ${formatCurrency(totalAmount)}`;
+
+        showNotification('Contas Vencendo Hoje! 📅', message);
+      }
+    };
+
+    // Check immediately
+    checkBillsDueToday();
+
+    // Check daily at 9 AM
+    const now = new Date();
+    const next9AM = new Date(now);
+    next9AM.setHours(9, 0, 0, 0);
+    if (next9AM <= now) {
+      next9AM.setDate(next9AM.getDate() + 1);
+    }
+    const timeUntil9AM = next9AM - now;
+
+    const dailyCheck = setTimeout(() => {
+      checkBillsDueToday();
+      // Then repeat every 24 hours
+      setInterval(checkBillsDueToday, 24 * 60 * 60 * 1000);
+    }, timeUntil9AM);
+
+    return () => clearTimeout(dailyCheck);
+  }, [token, transactions, notificationsEnabled]);
 
   // --- API ---
   const fetchTransactions = async () => {
@@ -361,6 +424,42 @@ export default function App() {
     }
   };
 
+  const requestNotificationPermission = async () => {
+    if (!('Notification' in window)) {
+      alert('Seu navegador não suporta notificações');
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+      setNotificationsEnabled(permission === 'granted');
+
+      if (permission === 'granted') {
+        showNotification('Notificações Ativadas! 🔔', 'Você receberá lembretes sobre contas vencendo');
+      }
+    } catch (error) {
+      console.error('Erro ao solicitar permissão:', error);
+    }
+  };
+
+  const showNotification = (title, body) => {
+    if (!notificationsEnabled) return;
+
+    if ('serviceWorker' in navigator && 'Notification' in window) {
+      navigator.serviceWorker.ready.then(registration => {
+        registration.showNotification(title, {
+          body,
+          icon: '/icon.svg',
+          badge: '/icon.svg',
+          vibrate: [200, 100, 200],
+          tag: 'bill-reminder',
+          requireInteraction: true
+        });
+      });
+    }
+  };
+
   const changeMonth = (offset) => {
     setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + offset, 1));
   };
@@ -381,9 +480,33 @@ export default function App() {
           <img src="/icon.svg" alt="logo" width="28" height="28" />
           <h1 className="text-lg font-bold">Finance</h1>
         </div>
-        <button onClick={handleLogout} className="btn-icon">
-          <LogOut size={18} />
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button
+            onClick={requestNotificationPermission}
+            className="btn-icon"
+            style={{
+              position: 'relative',
+              background: notificationsEnabled ? '#333' : 'transparent'
+            }}
+            title={notificationsEnabled ? 'Notificações ativadas' : 'Ativar notificações'}
+          >
+            <Bell size={18} color={notificationsEnabled ? '#4ade80' : '#888'} />
+            {!notificationsEnabled && (
+              <span style={{
+                position: 'absolute',
+                top: '4px',
+                right: '4px',
+                width: '8px',
+                height: '8px',
+                background: '#ef4444',
+                borderRadius: '50%'
+              }} />
+            )}
+          </button>
+          <button onClick={handleLogout} className="btn-icon">
+            <LogOut size={18} />
+          </button>
+        </div>
       </div>
 
       {/* General Balance Card */}
