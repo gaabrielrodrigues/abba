@@ -51,6 +51,19 @@ const initDb = async () => {
       );
     `);
 
+        // Add card_id column if it doesn't exist
+        await client.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'transactions' AND column_name = 'card_id'
+        ) THEN
+          ALTER TABLE transactions ADD COLUMN card_id VARCHAR(50);
+        END IF;
+      END $$;
+    `);
+
         await client.query(`
       CREATE TABLE IF NOT EXISTS categories (
         id VARCHAR(50) PRIMARY KEY,
@@ -66,6 +79,19 @@ const initDb = async () => {
         id SERIAL PRIMARY KEY,
         username VARCHAR(50) UNIQUE NOT NULL,
         password VARCHAR(255) NOT NULL
+      );
+    `);
+
+        // Create credit cards table
+        await client.query(`
+      CREATE TABLE IF NOT EXISTS credit_cards (
+        id VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        card_limit NUMERIC(10, 2) NOT NULL,
+        closing_day INTEGER NOT NULL CHECK (closing_day >= 1 AND closing_day <= 31),
+        due_day INTEGER NOT NULL CHECK (due_day >= 1 AND due_day <= 31),
+        color VARCHAR(20) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
@@ -174,7 +200,9 @@ app.get('/api/transactions', async (req, res) => {
 });
 
 app.post('/api/transactions', async (req, res) => {
-    const { description, amount, type, category, status, date, isRecurrent, recurrenceType, recurrenceCount } = req.body;
+    const { description, amount, type, category, status, date, cardId, isRecurrent, recurrenceType, recurrenceCount } = req.body;
+
+    console.log('📥 Backend recebeu transação:', { description, amount, type, category, status, date, cardId });
 
     try {
         const responseData = [];
@@ -209,8 +237,8 @@ app.post('/api/transactions', async (req, res) => {
                 }
 
                 const result = await client.query(
-                    'INSERT INTO transactions (description, amount, type, category, status, date) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-                    [currentDesc, amount, type, category, currentStatus, currentDate]
+                    'INSERT INTO transactions (description, amount, type, category, status, date, card_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+                    [currentDesc, amount, type, category, currentStatus, currentDate, cardId || null]
                 );
                 responseData.push(result.rows[0]);
             }
@@ -244,14 +272,100 @@ app.patch('/api/transactions/:id/status', async (req, res) => {
     }
 });
 
+app.put('/api/transactions/:id', async (req, res) => {
+    const { id } = req.params;
+    const { description, amount, type, category, status, date, cardId, isRecurrent, recurrenceType, recurrenceCount } = req.body;
+    console.log('📝 Atualizando transação:', { id, cardId });
+
+    try {
+        const result = await pool.query(
+            `UPDATE transactions 
+             SET description = $1, amount = $2, type = $3, category = $4, status = $5, date = $6, card_id = $7
+             WHERE id = $8
+             RETURNING *`,
+            [description, amount, type, category, status, date, cardId, id]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Transaction not found' });
+        }
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 app.delete('/api/transactions/:id', async (req, res) => {
     const { id } = req.params;
+    console.log('🗑️ Backend deletando transação:', id);
     try {
-        await pool.query('DELETE FROM transactions WHERE id = $1', [id]);
+        const result = await pool.query('DELETE FROM transactions WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            console.log('⚠️ Transação não encontrada no banco');
+            return res.status(404).json({ error: 'Transaction not found' });
+        }
         res.status(204).send();
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// --- Credit Cards Routes ---
+app.get('/api/cards', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM credit_cards ORDER BY created_at DESC');
+        // Map database columns to frontend format
+        const cards = result.rows.map(row => ({
+            id: row.id,
+            name: row.name,
+            limit: parseFloat(row.card_limit),
+            closingDay: row.closing_day,
+            dueDay: row.due_day,
+            color: row.color
+        }));
+        res.json(cards);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Error fetching cards' });
+    }
+});
+
+app.post('/api/cards', async (req, res) => {
+    const { id, name, limit, closingDay, dueDay, color } = req.body;
+    try {
+        const result = await pool.query(
+            'INSERT INTO credit_cards (id, name, card_limit, closing_day, due_day, color) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+            [id, name, limit, closingDay, dueDay, color]
+        );
+        const card = result.rows[0];
+        res.status(201).json({
+            id: card.id,
+            name: card.name,
+            limit: parseFloat(card.card_limit),
+            closingDay: card.closing_day,
+            dueDay: card.due_day,
+            color: card.color
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Error creating card' });
+    }
+});
+
+app.delete('/api/cards/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        // First delete all transactions linked to this card
+        await pool.query('DELETE FROM transactions WHERE card_id = $1', [id]);
+
+        // Then delete the card
+        await pool.query('DELETE FROM credit_cards WHERE id = $1', [id]);
+        res.status(204).send();
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Error deleting card' });
     }
 });
 

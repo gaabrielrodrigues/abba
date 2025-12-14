@@ -1,6 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Plus, LayoutDashboard, Menu as MenuIcon, TrendingUp, AlertTriangle } from 'lucide-react';
-
+import { Plus, LayoutDashboard, Menu as MenuIcon } from 'lucide-react';
 
 import './App.css';
 
@@ -31,7 +30,6 @@ export default function App() {
 
   // Form State
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [editingTransaction, setEditingTransaction] = useState(null);
 
   // Report State
   const [reportType, setReportType] = useState('expense');
@@ -70,20 +68,19 @@ export default function App() {
   }, [budgets]);
 
   // Credit Cards State
-  const [cards, setCards] = useState([]);
-
-  const fetchCards = async () => {
-    if (!token) return;
+  const [cards, setCards] = useState(() => {
     try {
-      const response = await fetch(`${API_BASE}/cards`);
-      if (response.ok) {
-        const data = await response.json();
-        setCards(data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch cards:', error);
+      const saved = localStorage.getItem('finance_cards');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error('Error parsing finance_cards', e);
+      return [];
     }
-  };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('finance_cards', JSON.stringify(cards));
+  }, [cards]);
 
   // Register Service Worker and setup notifications
   useEffect(() => {
@@ -155,8 +152,7 @@ export default function App() {
         const parsedData = data.map(t => ({
           ...t,
           amount: parseFloat(t.amount),
-          date: t.date.split('T')[0],
-          cardId: t.card_id // Map DB column (snake_case) to frontend prop (camelCase)
+          date: t.date.split('T')[0]
         }));
         setTransactions(parsedData);
       }
@@ -190,17 +186,12 @@ export default function App() {
     if (token) {
       fetchTransactions();
       fetchCategories();
-      fetchCards();
     }
   }, [token]);
 
   // --- Derived State ---
   const generalBalance = useMemo(() => {
     return transactions.reduce((acc, t) => {
-      // Exclude credit card transactions from general balance
-      // They only affect balance when the bill is paid
-      if (t.cardId) return acc;
-
       if (t.status !== 'paid') return acc;
       return t.type === 'income' ? acc + t.amount : acc - t.amount;
     }, 0);
@@ -218,10 +209,10 @@ export default function App() {
 
   const monthlyStats = useMemo(() => {
     const income = monthlyTransactions
-      .filter(t => t.type === 'income' && !t.cardId)
+      .filter(t => t.type === 'income')
       .reduce((acc, t) => acc + t.amount, 0);
     const expense = monthlyTransactions
-      .filter(t => t.type === 'expense' && !t.cardId)
+      .filter(t => t.type === 'expense')
       .reduce((acc, t) => acc + t.amount, 0);
     return { income, expense, balance: income - expense };
   }, [monthlyTransactions]);
@@ -231,7 +222,7 @@ export default function App() {
     const relevantType = reportType;
 
     monthlyTransactions
-      .filter(t => t.type === relevantType && !t.cardId) // Exclude credit card transactions
+      .filter(t => t.type === relevantType)
       .forEach(t => {
         dataMap[t.category] = (dataMap[t.category] || 0) + t.amount;
       });
@@ -260,7 +251,7 @@ export default function App() {
     // 2. Rising Category
     const sortedCategories = [... (categories.expense || [])].map(cat => {
       const spent = monthlyTransactions
-        .filter(t => t.category === cat.id && t.type === 'expense' && !t.cardId)
+        .filter(t => t.category === cat.id && t.type === 'expense')
         .reduce((sum, t) => sum + t.amount, 0);
       return { ...cat, spent };
     }).sort((a, b) => b.spent - a.spent);
@@ -277,7 +268,7 @@ export default function App() {
     // 3. Budget Alerts
     Object.entries(budgets).forEach(([catId, limit]) => {
       const spent = monthlyTransactions
-        .filter(t => t.category === catId && t.type === 'expense' && !t.cardId)
+        .filter(t => t.category === catId && t.type === 'expense')
         .reduce((sum, t) => sum + t.amount, 0);
 
       if (spent > limit) {
@@ -317,111 +308,6 @@ export default function App() {
       }));
   }, [transactions]);
 
-  // --- Credit Card Bills Calculation ---
-  const cardsWithBills = useMemo(() => {
-    if (!cards || cards.length === 0) return [];
-
-    return cards.map(card => {
-      // Get all credit transactions for this card
-      const cardTransactions = transactions.filter(t =>
-        t.cardId === card.id && t.type === 'expense'
-      );
-
-      // Calculate current billing period
-      const today = new Date();
-      const currentMonth = today.getMonth();
-      const currentYear = today.getFullYear();
-      const closingDay = parseInt(card.closingDay);
-      const dueDay = parseInt(card.dueDay);
-
-      // Determine current billing cycle
-      let billingStartDate, billingEndDate, billDueDate;
-
-      if (today.getDate() <= closingDay) {
-        // We're still in the current billing cycle
-        billingStartDate = new Date(currentYear, currentMonth - 1, closingDay + 1);
-        billingEndDate = new Date(currentYear, currentMonth, closingDay);
-        billDueDate = new Date(currentYear, currentMonth, dueDay);
-      } else {
-        // We're after closing, in next billing cycle
-        billingStartDate = new Date(currentYear, currentMonth, closingDay + 1);
-        billingEndDate = new Date(currentYear, currentMonth + 1, closingDay);
-        billDueDate = new Date(currentYear, currentMonth + 1, dueDay);
-      }
-
-      // Calculate current bill (transactions in current billing period)
-      const currentBill = cardTransactions
-        .filter(t => {
-          const transactionDate = new Date(t.date + 'T12:00:00');
-          return transactionDate > billingStartDate && transactionDate <= billingEndDate;
-        })
-        .reduce((sum, t) => sum + t.amount, 0);
-
-      // Calculate next bill
-
-      // Calculate next bill (transactions after current closing date)
-      const nextBillingStart = billingEndDate;
-      const nextBillingEnd = new Date(billingEndDate);
-      nextBillingEnd.setMonth(nextBillingEnd.getMonth() + 1);
-
-      const nextBill = cardTransactions
-        .filter(t => {
-          const transactionDate = new Date(t.date + 'T12:00:00');
-          return transactionDate > nextBillingStart && transactionDate <= nextBillingEnd;
-        })
-        .reduce((sum, t) => sum + t.amount, 0);
-
-      return {
-        ...card,
-        currentBill,
-        nextBill,
-        availableLimit: (card.limit || 0) - currentBill - nextBill,
-        billDueDate: billDueDate.toISOString().split('T')[0],
-        billingEndDate: billingEndDate.toISOString().split('T')[0]
-      };
-    });
-  }, [cards, transactions]);
-
-  // Combine real transactions with virtual future bills for Extract view
-  const extractTransactions = useMemo(() => {
-    const virtualBills = cardsWithBills
-      .filter(card => card.currentBill > 0)
-      .map(card => {
-        // Only show if due date is in current viewed month
-        const dueDate = new Date(card.billDueDate + 'T12:00:00');
-        if (dueDate.getMonth() !== currentDate.getMonth() ||
-          dueDate.getFullYear() !== currentDate.getFullYear()) {
-          return null;
-        }
-
-        // Check if already paid (fuzzy match: same amount, recent date, paid status)
-        const alreadyPaid = monthlyTransactions.some(t =>
-          (Math.abs(t.amount - card.currentBill) < 0.01) && // Float safe comparison
-          t.type === 'expense' &&
-          t.status === 'paid' &&
-          t.description.toLowerCase().includes('fatura')
-        );
-
-        if (alreadyPaid) return null;
-
-        return {
-          id: `virtual-bill-${card.id}`,
-          description: `Fatura ${card.name}`,
-          amount: card.currentBill,
-          type: 'expense',
-          category: 'other', // Use a generic category icon
-          status: 'pending',
-          date: card.billDueDate,
-          isVirtual: true, // Flag to identify as virtual
-          virtualCard: card // Store card ref to allow paying from extract
-        };
-      })
-      .filter(Boolean);
-
-    return [...monthlyTransactions, ...virtualBills].sort((a, b) => new Date(b.date) - new Date(a.date));
-  }, [monthlyTransactions, cardsWithBills, currentDate]);
-
-
 
   // --- Handlers ---
   const handleLogin = (newToken, user = 'Usuário') => {
@@ -446,82 +332,6 @@ export default function App() {
     }));
   };
 
-  const handleCardCreated = async (card) => {
-    try {
-      const response = await fetch(`${API_BASE}/cards`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(card)
-      });
-      if (response.ok) {
-        await fetchCards(); // Refresh cards list
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error('Error creating card:', error);
-      return false;
-    }
-  };
-
-  const handleCardDeleted = async (id) => {
-    console.log('🗑️ Tentando deletar cartão ID:', id);
-    try {
-      const response = await fetch(`${API_BASE}/cards/${id}`, {
-        method: 'DELETE'
-      });
-
-      if (!response.ok) {
-        console.error('Erro ao deletar (status):', response.status);
-        return;
-      }
-
-      console.log('✅ Cartão deletado com sucesso');
-      await fetchCards(); // Refresh cards list
-    } catch (error) {
-      console.error('Error deleting card:', error);
-    }
-  };
-
-  const handlePayBill = async (card) => {
-    try {
-      // Create an expense transaction representing the bill payment
-      // This will deduct from GENERAL BALANCE (no cardId)
-      const transaction = {
-        description: `Fatura ${card.name}`,
-        amount: card.currentBill,
-        type: 'expense',
-        category: 'other', // Or specific 'bills' category if available
-        status: 'paid',
-        date: new Date().toISOString().split('T')[0],
-        cardId: null // Explicitly null so it affects cash balance
-      };
-
-      const response = await fetch(`${API_BASE}/transactions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(transaction)
-      });
-
-      if (response.ok) {
-        fetchTransactions();
-        alert('Pagamento registrado com sucesso! O valor foi descontado do saldo geral.');
-      } else {
-        alert('Erro ao registrar pagamento.');
-      }
-    } catch (error) {
-      console.error('Error paying bill:', error);
-    }
-  };
-
-  const handleEditTransaction = (transaction) => {
-    // If virtual, ignore editing for now
-    if (transaction.isVirtual) return;
-
-    setEditingTransaction(transaction);
-    setIsFormOpen(true);
-  };
-
   const toggleStatus = async (id, currentStatus) => {
     const newStatus = currentStatus === 'paid' ? 'pending' : 'paid';
     setTransactions(transactions.map(t => t.id === id ? { ...t, status: newStatus } : t));
@@ -539,18 +349,15 @@ export default function App() {
 
   const handleDelete = async (id) => {
     if (!confirm('Deseja realmente excluir esta transação?')) return;
-    console.log('🗑️ Deletando transação ID:', id);
 
     const originalTransactions = [...transactions];
     setTransactions(transactions.filter(t => t.id !== id));
 
     try {
-      const response = await fetch(`${API_BASE}/transactions/${id}`, {
+      await fetch(`${API_BASE}/transactions/${id}`, {
         method: 'DELETE'
       });
-      if (!response.ok) throw new Error('Falha ao deletar');
     } catch (error) {
-      console.error('Erro ao deletar transação:', error);
       setTransactions(originalTransactions);
     }
   };
@@ -630,15 +437,12 @@ export default function App() {
           monthlyStats={monthlyStats}
         />}
         {activeView === VIEWS.EXTRACT && <Extract
-          monthlyTransactions={extractTransactions}
+          monthlyTransactions={monthlyTransactions}
           categories={categories}
-          cards={cardsWithBills}
           toggleStatus={toggleStatus}
           handleDelete={handleDelete}
           changeMonth={changeMonth}
           formattedMonth={formattedMonth}
-          onPayBill={handlePayBill}
-          onEditTransaction={handleEditTransaction}
         />}
         {activeView === VIEWS.REPORTS && <Reports
           setActiveView={setActiveView}
@@ -661,10 +465,8 @@ export default function App() {
         />}
         {activeView === VIEWS.CARDS && <Cards
           setActiveView={setActiveView}
-          cards={cardsWithBills}
-          onCardCreated={handleCardCreated}
-          onCardDeleted={handleCardDeleted}
-          onPayBill={handlePayBill}
+          cards={cards}
+          setCards={setCards}
         />}
         {activeView === VIEWS.MENU && <Menu
           activeView={activeView}
@@ -720,20 +522,16 @@ export default function App() {
 
       </nav>
 
+      {/* 
       <TransactionModal
         isOpen={isFormOpen}
-        onClose={() => {
-          setIsFormOpen(false);
-          setEditingTransaction(null);
-        }}
-        onSuccess={() => {
-          fetchTransactions();
-        }}
+        onClose={() => setIsFormOpen(false)}
+        onSuccess={fetchTransactions}
         categories={categories}
-        cards={cards}
+        cards={cards} 
         onCategoryCreated={handleCategoryCreated}
-        initialData={editingTransaction}
-      />
+      /> 
+      */}
     </>
   );
 }

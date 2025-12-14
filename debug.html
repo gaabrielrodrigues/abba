@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Test</title>
+</head>
+<body>
+    <h1>If you see this, the server is working</h1>
+    <script>
+        console.log('Debug page loaded successfully');
+        // Test localStorage
+        try {
+            localStorage.setItem('test', 'value');
+            console.log('localStorage works');
+            
+            // Check for corrupted data
+            const budgets = localStorage.getItem('finance_budgets');
+            const cards = localStorage.getItem('finance_cards');
+            console.log('Budgets data:', budgets);
+            console.log('Cards data:', cards);
+            
+            if (budgets) {
+                try {
+                    JSON.parse(budgets);
+                    console.log('Budgets JSON is valid');
+                } catch (e) {
+                    console.error('Budgets JSON is CORRUPTED:', e);
+                    localStorage.removeItem('finance_budgets');
+                }
+            }
+            
+            if (cards) {
+                try {
+                    JSON.parse(cards);
+                    console.log('Cards JSON is valid');
+                } catch (e) {
+                    console.error('Cards JSON is CORRUPTED:', e);
+                    localStorage.removeItem('finance_cards');
+                }
+            }
+        } catch (e) {
+            console.error('localStorage error:', e);
+        }
+    </script>
+</body>
+</html>
